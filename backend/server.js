@@ -14,7 +14,7 @@ require("./ping.js");
 const app = express();
 const server = http.createServer(app);
 
-// Socket.io setup with CORS
+// Socket.io setup with CORS — optimized for 50+ concurrent calls
 const io = new Server(server, {
   cors: {
     origin: "*",
@@ -22,6 +22,9 @@ const io = new Server(server, {
   },
   pingTimeout: 60000,
   pingInterval: 25000,
+  maxHttpBufferSize: 1e6, // 1MB — handles bursts of ICE candidates
+  transports: ["websocket", "polling"], // Prefer WebSocket for lower latency
+  allowUpgrades: true,
 });
 
 // Middleware

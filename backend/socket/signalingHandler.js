@@ -2,6 +2,9 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
 module.exports = (io) => {
+  // In-memory userId -> socketId map for fast lookups (no DB queries on hot path)
+  const userSocketMap = new Map();
+
   // Authenticate socket connections via JWT
   io.use(async (socket, next) => {
     try {
@@ -27,7 +30,10 @@ module.exports = (io) => {
   io.on('connection', async (socket) => {
     console.log(`🟢 User connected: ${socket.username} (${socket.id})`);
 
-    // Update user status to online and store socket ID
+    // Update in-memory map
+    userSocketMap.set(socket.userId, socket.id);
+
+    // Update user status to online and store socket ID in DB
     await User.findByIdAndUpdate(socket.userId, {
       status: 'online',
       socketId: socket.id,
@@ -38,6 +44,9 @@ module.exports = (io) => {
       userId: socket.userId,
       status: 'online',
     });
+
+    // Log active connections
+    console.log(`📊 Active connections: ${userSocketMap.size}`);
 
     // ========================
     // CALL SIGNALING EVENTS
@@ -59,11 +68,16 @@ module.exports = (io) => {
         return;
       }
 
-      // Send incoming call to the target user
-      io.to(targetUser.socketId).emit('incoming-call', {
-        fromUserId: socket.userId,
-        fromUsername: socket.username,
-      });
+      // Use in-memory map for the actual emit (faster)
+      const targetSocketId = userSocketMap.get(toUserId);
+      if (targetSocketId) {
+        io.to(targetSocketId).emit('incoming-call', {
+          fromUserId: socket.userId,
+          fromUsername: socket.username,
+        });
+      } else {
+        socket.emit('call-error', { message: 'User is not available' });
+      }
     });
 
     // User B accepts the call
@@ -71,17 +85,18 @@ module.exports = (io) => {
       const { toUserId } = data;
       console.log(`✅ Call accepted by ${socket.username}`);
 
-      const callerUser = await User.findById(toUserId);
-      if (callerUser && callerUser.socketId) {
-        io.to(callerUser.socketId).emit('call-accepted', {
+      // Use in-memory map for fast relay
+      const callerSocketId = userSocketMap.get(toUserId);
+      if (callerSocketId) {
+        io.to(callerSocketId).emit('call-accepted', {
           fromUserId: socket.userId,
           fromUsername: socket.username,
         });
       }
 
-      // Set both users to busy
-      await User.findByIdAndUpdate(socket.userId, { status: 'busy' });
-      await User.findByIdAndUpdate(toUserId, { status: 'busy' });
+      // Set both users to busy (DB update in background, not blocking signaling)
+      User.findByIdAndUpdate(socket.userId, { status: 'busy' }).catch(() => {});
+      User.findByIdAndUpdate(toUserId, { status: 'busy' }).catch(() => {});
 
       // Broadcast busy status
       socket.broadcast.emit('user-status-changed', {
@@ -95,13 +110,13 @@ module.exports = (io) => {
     });
 
     // User B declines the call
-    socket.on('call-declined', async (data) => {
+    socket.on('call-declined', (data) => {
       const { toUserId } = data;
       console.log(`❌ Call declined by ${socket.username}`);
 
-      const callerUser = await User.findById(toUserId);
-      if (callerUser && callerUser.socketId) {
-        io.to(callerUser.socketId).emit('call-declined', {
+      const callerSocketId = userSocketMap.get(toUserId);
+      if (callerSocketId) {
+        io.to(callerSocketId).emit('call-declined', {
           fromUserId: socket.userId,
           fromUsername: socket.username,
         });
@@ -109,43 +124,46 @@ module.exports = (io) => {
     });
 
     // ========================
-    // WebRTC SIGNALING
+    // WebRTC SIGNALING (HOT PATH — no DB queries!)
     // ========================
 
-    // Forward WebRTC offer
-    socket.on('offer', async (data) => {
+    // Forward WebRTC offer (uses in-memory map — instant relay)
+    socket.on('offer', (data) => {
       const { toUserId, offer } = data;
-      const targetUser = await User.findById(toUserId);
-      if (targetUser && targetUser.socketId) {
-        io.to(targetUser.socketId).emit('offer', {
+      const targetSocketId = userSocketMap.get(toUserId);
+      if (targetSocketId) {
+        io.to(targetSocketId).emit('offer', {
           fromUserId: socket.userId,
           offer,
         });
+        console.log(`📤 Offer relayed: ${socket.username} → ${toUserId}`);
       }
     });
 
-    // Forward WebRTC answer
-    socket.on('answer', async (data) => {
+    // Forward WebRTC answer (uses in-memory map — instant relay)
+    socket.on('answer', (data) => {
       const { toUserId, answer } = data;
-      const targetUser = await User.findById(toUserId);
-      if (targetUser && targetUser.socketId) {
-        io.to(targetUser.socketId).emit('answer', {
+      const targetSocketId = userSocketMap.get(toUserId);
+      if (targetSocketId) {
+        io.to(targetSocketId).emit('answer', {
           fromUserId: socket.userId,
           answer,
         });
+        console.log(`📤 Answer relayed: ${socket.username} → ${toUserId}`);
       }
     });
 
-    // Forward ICE candidates
-    socket.on('ice-candidate', async (data) => {
+    // Forward ICE candidates (uses in-memory map — instant relay, NO DB query!)
+    socket.on('ice-candidate', (data) => {
       const { toUserId, candidate } = data;
-      const targetUser = await User.findById(toUserId);
-      if (targetUser && targetUser.socketId) {
-        io.to(targetUser.socketId).emit('ice-candidate', {
+      const targetSocketId = userSocketMap.get(toUserId);
+      if (targetSocketId) {
+        io.to(targetSocketId).emit('ice-candidate', {
           fromUserId: socket.userId,
           candidate,
         });
       }
+      // Note: No console.log for ICE candidates to avoid flooding logs at scale
     });
 
     // End call
@@ -153,16 +171,16 @@ module.exports = (io) => {
       const { toUserId } = data;
       console.log(`🔴 Call ended by ${socket.username}`);
 
-      const targetUser = await User.findById(toUserId);
-      if (targetUser && targetUser.socketId) {
-        io.to(targetUser.socketId).emit('call-ended', {
+      const targetSocketId = userSocketMap.get(toUserId);
+      if (targetSocketId) {
+        io.to(targetSocketId).emit('call-ended', {
           fromUserId: socket.userId,
         });
       }
 
-      // Set both users back to online
-      await User.findByIdAndUpdate(socket.userId, { status: 'online' });
-      await User.findByIdAndUpdate(toUserId, { status: 'online' });
+      // Set both users back to online (DB update in background)
+      User.findByIdAndUpdate(socket.userId, { status: 'online' }).catch(() => {});
+      User.findByIdAndUpdate(toUserId, { status: 'online' }).catch(() => {});
 
       // Broadcast online status
       socket.broadcast.emit('user-status-changed', {
@@ -182,6 +200,9 @@ module.exports = (io) => {
     socket.on('disconnect', async () => {
       console.log(`🔴 User disconnected: ${socket.username} (${socket.id})`);
 
+      // Remove from in-memory map
+      userSocketMap.delete(socket.userId);
+
       await User.findByIdAndUpdate(socket.userId, {
         status: 'offline',
         socketId: null,
@@ -192,6 +213,8 @@ module.exports = (io) => {
         userId: socket.userId,
         status: 'offline',
       });
+
+      console.log(`📊 Active connections: ${userSocketMap.size}`);
     });
   });
 };
