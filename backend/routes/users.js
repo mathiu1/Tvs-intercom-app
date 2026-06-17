@@ -26,19 +26,24 @@ router.get('/ice-servers', authMiddleware, async (req, res) => {
     { urls: ["stun:stun.services.mozilla.com"] },
     { urls: ["stun:stun.relay.metered.ca:80"] },
     {
-      urls: ["turn:openrelay.metered.ca:80"],
-      username: "openrelayproject",
-      credential: "openrelayproject"
+      urls: ["turn:global.relay.metered.ca:80"],
+      username: "479988f31b82910c04162f7b",
+      credential: "BQbNCorjxFjVae5u"
     },
     {
-      urls: ["turn:openrelay.metered.ca:443"],
-      username: "openrelayproject",
-      credential: "openrelayproject"
+      urls: ["turn:global.relay.metered.ca:80?transport=tcp"],
+      username: "479988f31b82910c04162f7b",
+      credential: "BQbNCorjxFjVae5u"
     },
     {
-      urls: ["turn:openrelay.metered.ca:443?transport=tcp"],
-      username: "openrelayproject",
-      credential: "openrelayproject"
+      urls: ["turn:global.relay.metered.ca:443"],
+      username: "479988f31b82910c04162f7b",
+      credential: "BQbNCorjxFjVae5u"
+    },
+    {
+      urls: ["turns:global.relay.metered.ca:443?transport=tcp"],
+      username: "479988f31b82910c04162f7b",
+      credential: "BQbNCorjxFjVae5u"
     }
   ];
 
