@@ -50,7 +50,7 @@ router.get('/ice-servers', authMiddleware, async (req, res) => {
 
   // Fetch dynamic credentials from Metered.ca using Node's standard https module
   const https = require('https');
-  https.get(`https://metered.ca/api/v1/turn/credentials?apiKey=${apiKey}`, (response) => {
+  https.get(`https://api.metered.ca/api/v1/turn/credentials?apiKey=${apiKey}`, (response) => {
     let data = '';
     response.on('data', (chunk) => {
       data += chunk;
