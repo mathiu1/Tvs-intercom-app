@@ -43,14 +43,15 @@ router.get('/ice-servers', authMiddleware, async (req, res) => {
   ];
 
   const apiKey = process.env.METERED_API_KEY;
-  if (!apiKey) {
-    // Fallback to static servers if API Key is not configured
+  const domain = process.env.METERED_DOMAIN;
+  if (!apiKey || !domain) {
+    // Fallback immediately if credentials are not configured to avoid ENOTFOUND errors
     return res.json({ iceServers: fallbackIceServers });
   }
 
   // Fetch dynamic credentials from Metered.ca using Node's standard https module
   const https = require('https');
-  https.get(`https://api.metered.ca/api/v1/turn/credentials?apiKey=${apiKey}`, (response) => {
+  https.get(`https://${domain}/api/v1/turn/credentials?apiKey=${apiKey}`, (response) => {
     let data = '';
     response.on('data', (chunk) => {
       data += chunk;
@@ -58,7 +59,7 @@ router.get('/ice-servers', authMiddleware, async (req, res) => {
     response.on('end', () => {
       try {
         const parsed = JSON.parse(data);
-        
+
         // If the API key is incorrect or expired, Metered.ca returns an error object, not an array.
         if (!Array.isArray(parsed)) {
           console.warn('⚠️ Metered.ca API did not return an array. Falling back to static servers. Response:', parsed);
