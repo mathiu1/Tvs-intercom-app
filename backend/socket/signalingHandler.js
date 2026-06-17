@@ -162,8 +162,8 @@ module.exports = (io) => {
           fromUserId: socket.userId,
           candidate,
         });
+        console.log(`🧊 ICE Candidate relayed: ${socket.username} → ${toUserId}`);
       }
-      // Note: No console.log for ICE candidates to avoid flooding logs at scale
     });
 
     // End call

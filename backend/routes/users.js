@@ -18,4 +18,63 @@ router.get('/', authMiddleware, async (req, res) => {
   }
 });
 
+// GET /api/users/ice-servers - Get WebRTC ICE servers (dynamic from Metered.ca if API Key is configured)
+router.get('/ice-servers', authMiddleware, async (req, res) => {
+  const apiKey = process.env.METERED_API_KEY;
+  if (!apiKey) {
+    // Fallback to static servers if API Key is not configured
+    return res.json({
+      iceServers: [
+        { urls: ["stun:stun.l.google.com:19302"] },
+        { urls: ["stun:stun.cloudflare.com:3478"] },
+        { urls: ["stun:stun.relay.metered.ca:80"] },
+        {
+          urls: ["turn:openrelay.metered.ca:80"],
+          username: "openrelayproject",
+          credential: "openrelayproject"
+        },
+        {
+          urls: ["turn:openrelay.metered.ca:443"],
+          username: "openrelayproject",
+          credential: "openrelayproject"
+        },
+        {
+          urls: ["turn:openrelay.metered.ca:443?transport=tcp"],
+          username: "openrelayproject",
+          credential: "openrelayproject"
+        }
+      ]
+    });
+  }
+
+  // Fetch dynamic credentials from Metered.ca using Node's standard https module
+  const https = require('https');
+  https.get(`https://metered.ca/api/v1/turn/credentials?apiKey=${apiKey}`, (response) => {
+    let data = '';
+    response.on('data', (chunk) => {
+      data += chunk;
+    });
+    response.on('end', () => {
+      try {
+        const parsed = JSON.parse(data);
+        // Ensure urls is normalized to list of strings
+        const iceServers = parsed.map(server => {
+          return {
+            urls: typeof server.urls === 'string' ? [server.urls] : server.urls,
+            username: server.username || null,
+            credential: server.credential || null
+          };
+        });
+        res.json({ iceServers });
+      } catch (e) {
+        console.error('Error parsing Metered.ca response:', e);
+        res.status(500).json({ message: 'Error fetching ICE servers from provider.' });
+      }
+    });
+  }).on('error', (err) => {
+    console.error('Metered.ca API request failed:', err);
+    res.status(500).json({ message: 'Failed to contact ICE server provider.' });
+  });
+});
+
 module.exports = router;
