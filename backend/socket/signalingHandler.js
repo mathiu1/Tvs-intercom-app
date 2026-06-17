@@ -4,6 +4,8 @@ const User = require('../models/User');
 module.exports = (io) => {
   // In-memory userId -> socketId map for fast lookups (no DB queries on hot path)
   const userSocketMap = new Map();
+  // In-memory active calls mapping: userId -> peerUserId
+  const activeCalls = new Map();
 
   // Authenticate socket connections via JWT
   io.use(async (socket, next) => {
@@ -98,6 +100,10 @@ module.exports = (io) => {
       User.findByIdAndUpdate(socket.userId, { status: 'busy' }).catch(() => {});
       User.findByIdAndUpdate(toUserId, { status: 'busy' }).catch(() => {});
 
+      // Track active call in-memory
+      activeCalls.set(socket.userId, toUserId);
+      activeCalls.set(toUserId, socket.userId);
+
       // Broadcast busy status
       socket.broadcast.emit('user-status-changed', {
         userId: socket.userId,
@@ -171,24 +177,30 @@ module.exports = (io) => {
       const { toUserId } = data;
       console.log(`🔴 Call ended by ${socket.username}`);
 
-      const targetSocketId = userSocketMap.get(toUserId);
-      if (targetSocketId) {
-        io.to(targetSocketId).emit('call-ended', {
-          fromUserId: socket.userId,
+      const peerId = activeCalls.get(socket.userId) || toUserId;
+      activeCalls.delete(socket.userId);
+
+      if (peerId) {
+        activeCalls.delete(peerId);
+        const targetSocketId = userSocketMap.get(peerId);
+        if (targetSocketId) {
+          io.to(targetSocketId).emit('call-ended', {
+            fromUserId: socket.userId,
+          });
+        }
+        User.findByIdAndUpdate(peerId, { status: 'online' }).catch(() => {});
+        socket.broadcast.emit('user-status-changed', {
+          userId: peerId,
+          status: 'online',
         });
       }
 
       // Set both users back to online (DB update in background)
       User.findByIdAndUpdate(socket.userId, { status: 'online' }).catch(() => {});
-      User.findByIdAndUpdate(toUserId, { status: 'online' }).catch(() => {});
 
       // Broadcast online status
       socket.broadcast.emit('user-status-changed', {
         userId: socket.userId,
-        status: 'online',
-      });
-      socket.broadcast.emit('user-status-changed', {
-        userId: toUserId,
         status: 'online',
       });
     });
@@ -199,6 +211,25 @@ module.exports = (io) => {
 
     socket.on('disconnect', async () => {
       console.log(`🔴 User disconnected: ${socket.username} (${socket.id})`);
+
+      // If the user was in an active call, end it for the peer
+      const peerId = activeCalls.get(socket.userId);
+      if (peerId) {
+        activeCalls.delete(socket.userId);
+        activeCalls.delete(peerId);
+
+        const targetSocketId = userSocketMap.get(peerId);
+        if (targetSocketId) {
+          io.to(targetSocketId).emit('call-ended', {
+            fromUserId: socket.userId,
+          });
+        }
+        User.findByIdAndUpdate(peerId, { status: 'online' }).catch(() => {});
+        socket.broadcast.emit('user-status-changed', {
+          userId: peerId,
+          status: 'online',
+        });
+      }
 
       // Remove from in-memory map
       userSocketMap.delete(socket.userId);
