@@ -9,7 +9,7 @@ const authRoutes = require("./routes/auth");
 const userRoutes = require("./routes/users");
 const setupSignaling = require("./socket/signalingHandler");
 
-require("./ping.js");
+//require("./ping.js");
 
 const app = express();
 const server = http.createServer(app);
